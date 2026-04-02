@@ -31,7 +31,6 @@ try:
 except ImportError:
     TIKTOKEN_AVAILABLE = False
     tiktoken = None
-from fastmcp.server.dependencies import get_access_token, AccessToken
 from fastmcp import Context
 
 # Use standard exception for tool errors
@@ -241,14 +240,10 @@ class TokenCountingMiddleware(Middleware):
 # Create FastMCP app directly without authentication wrapper
 from fastmcp import FastMCP
 
-def create_app(auth=None):
-    """Create FastMCP app with standard capabilities and optional auth."""
+def create_app():
+    """Create FastMCP app with standard capabilities."""
     global app
-    if auth:
-        app.auth = auth
-        logger.info("MCP server created with Bearer authentication enabled")
-    else:
-        logger.info("MCP server created with standard capabilities...")
+    logger.info("MCP server created with standard capabilities...")
     
     # Add token counting middleware only if tiktoken is available
     if TIKTOKEN_AVAILABLE:
@@ -1124,24 +1119,6 @@ For best results, use exact phrases with quotes for legal terms."""),
     kararTarihiEnd: str = Field("", description="End date (ISO 8601 format)")
 ) -> dict:
     """Search Turkish legal databases via unified Bedesten API."""
-    
-    # Get Bearer token information for access control and logging
-    try:
-        access_token: AccessToken = get_access_token()
-        user_id = access_token.client_id
-        user_scopes = access_token.scopes
-        
-        # Check for required scopes - DISABLED: Already handled by Bearer auth provider
-        # if "yargi.read" not in user_scopes and "yargi.search" not in user_scopes:
-        #     raise ToolError(f"Insufficient permissions: 'yargi.read' or 'yargi.search' scope required. Current scopes: {user_scopes}")
-        
-        logger.info(f"Tool 'search_bedesten_unified' called by user '{user_id}' with scopes {user_scopes}")
-        
-    except Exception as e:
-        # Development mode fallback - allow access without strict token validation
-        logger.warning(f"Bearer token validation failed, using development mode: {str(e)}")
-        user_id = "dev-user"
-        user_scopes = ["yargi.read", "yargi.search"]
     
     pageSize = 10  # Default value
     
