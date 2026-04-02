@@ -28,11 +28,7 @@ from mcp_server_main import create_app
 _auth_check = os.getenv("ENABLE_AUTH", "false").lower() == "true"
 
 if _auth_check:
-    # Import MCP Auth HTTP adapter (OAuth endpoints)
-    try:
-        from mcp_auth_http_simple import router as mcp_auth_router
-    except ImportError:
-        mcp_auth_router = None
+    mcp_auth_router = None
 
     # Import Stripe webhook router
     try:
@@ -155,9 +151,6 @@ app = FastAPI(
 # Add auth-related routers to FastAPI (only if available)
 if stripe_router:
     app.include_router(stripe_router, prefix="/api/stripe")
-
-if mcp_auth_router:
-    app.include_router(mcp_auth_router)
 
 # Custom 401 exception handler for MCP spec compliance
 @app.exception_handler(401)
