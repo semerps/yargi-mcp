@@ -19,10 +19,17 @@ import logging
 import httpx
 import json
 import time
+import os
+from pathlib import Path
 from collections import defaultdict
 from pydantic import HttpUrl, Field
 from typing import Optional, Dict, List, Literal, Any
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from dotenv import load_dotenv
+
+# Load .env file from project root
+env_path = Path(__file__).parent / ".env"
+load_dotenv(env_path)
 
 # Optional tiktoken import for token counting
 try:

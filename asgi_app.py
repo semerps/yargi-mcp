@@ -11,24 +11,43 @@ Usage:
 import os
 import json
 import logging
+from pathlib import Path
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from starlette.middleware import Middleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.datastructures import MutableHeaders
+
+# Load .env file from project root
+env_path = Path(__file__).parent / ".env"
+load_dotenv(env_path)
 from starlette.middleware.cors import CORSMiddleware
+import uuid
 
 from mcp_server_main import create_app
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
+
 # Configure CORS
-cors_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "*").strip()
+if allowed_origins_str == "*":
+    cors_origins = ["*"]
+else:
+    cors_origins = [origin.strip() for origin in allowed_origins_str.split(",")]
+
+logger.debug(f"CORS Origins configured: {cors_origins}")
 
 # Create MCP app
 mcp_server = create_app()
 
-# Create MCP Starlette sub-application
-mcp_app = mcp_server.http_app(path="/")
+# Create MCP Starlette sub-application with JSON response (no SSE)
+_mcp_app = mcp_server.http_app(
+    path="/",
+    transport="http",
+    json_response=True,  # Return plain JSON instead of SSE
+    stateless_http=True
+)
 
 
 # Configure JSON encoder for proper Turkish character support
@@ -48,24 +67,35 @@ class UTF8JSONResponse(JSONResponse):
             separators=(",", ":"),
         ).encode("utf-8")
 
-custom_middleware = [
-    Middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID", "X-Session-ID"],
-    ),
-]
 
 # Create FastAPI wrapper application
 app = FastAPI(
     title="Yargı MCP Server",
     description="MCP server for Turkish legal databases",
     version="0.1.0",
-    middleware=custom_middleware,
     default_response_class=UTF8JSONResponse,
     redirect_slashes=False,
+)
+
+# Add middlewares in reverse order (last added = first called)
+app.add_middleware(CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allow_headers=[
+        "Content-Type",
+        "X-Request-ID",
+        "X-Session-ID",
+        "Authorization",
+        "Accept",
+        "Origin",
+        "User-Agent",
+        "DNT",
+        "Cache-Control",
+        "X-Requested-With",
+    ],
+    expose_headers=["Content-Type", "X-Request-ID", "X-Session-ID"],
+    max_age=3600,  # 1 hour
 )
 
 
@@ -76,7 +106,6 @@ async def health_check():
         "status": "healthy",
         "service": "Yargı MCP Server",
         "version": "0.1.0",
-        "tools_count": len(mcp_server._tool_manager._tools),
     }
 
 
@@ -85,6 +114,48 @@ async def redirect_to_slash(request: Request):
     """Redirect /mcp to /mcp/ preserving HTTP method with 308"""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/mcp/", status_code=308)
+
+
+# Session-ID preserving ASGI wrapper class
+class MCPAsgiApp:
+    """ASGI app wrapper that extracts/creates session ID and passes in request state."""
+
+    def __init__(self, mcp_app):
+        self.mcp_app = mcp_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            # Extract session ID from headers or create new one
+            headers = list(scope.get("headers", []))
+            session_id = None
+
+            # Look for session ID in headers (case-insensitive)
+            for header_name, header_value in headers:
+                if header_name.lower() == b"x-session-id":
+                    session_id = header_value.decode() if isinstance(header_value, bytes) else header_value
+                    break
+
+            # Create new session ID if not found
+            if not session_id:
+                session_id = str(uuid.uuid4())
+
+            # Add/update session ID in headers for consistency
+            headers = [(h[0], h[1]) for h in headers if h[0].lower() != b"x-session-id"]
+            headers.append((b"x-session-id", session_id.encode()))
+
+            scope["headers"] = headers
+
+            # Also set in state for the application
+            if "state" not in scope:
+                scope["state"] = {}
+            scope["state"]["session_id"] = session_id
+
+        # Forward to actual MCP app
+        await self.mcp_app(scope, receive, send)
+
+
+# Mount ASGI app at /mcp/ (without wrapper - let FastMCP handle it directly)
+app.mount("/mcp", _mcp_app)
 
 
 @app.get("/")
@@ -121,26 +192,17 @@ async def root():
 @app.get("/status")
 async def status():
     """Status endpoint with detailed information"""
-    tools = []
-    for tool in mcp_server._tool_manager._tools.values():
-        tools.append({
-            "name": tool.name,
-            "description": tool.description[:100] + "..." if len(tool.description) > 100 else tool.description
-        })
-
     return {
         "status": "operational",
-        "tools": tools,
-        "total_tools": len(tools),
+        "service": "Yargı MCP Server",
+        "version": "0.1.0",
         "transport": "streamable_http",
+        "note": "Use /mcp endpoint for MCP requests",
     }
 
 
-# Mount MCP app at /mcp/
-app.mount("/mcp/", mcp_app)
-
-# Set the lifespan context after mounting
-app.router.lifespan_context = mcp_app.lifespan
+# Get lifespan context from MCP app (for startup/shutdown)
+app.router.lifespan_context = _mcp_app.lifespan
 
 # Export for uvicorn
 __all__ = ["app"]
