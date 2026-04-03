@@ -1126,7 +1126,9 @@ For best results, use exact phrases with quotes for legal terms."""),
     
     search_request = BedestenSearchRequest(data=search_data)
     
-    logger.info(f"User '{user_id}' searching bedesten: phrase='{phrase}', court_types={court_types}, birimAdi='{birimAdi}', page={pageNumber}")
+    logger.info(
+        f"Searching bedesten: phrase='{phrase}', court_types={court_types}, birimAdi='{birimAdi}', page={pageNumber}"
+    )
     
     try:
         response = await bedesten_client_instance.search_documents(search_request)
