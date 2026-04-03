@@ -299,20 +299,6 @@ from sayistay_mcp_module.models import (
 )
 from sayistay_mcp_module.unified_client import SayistayUnifiedClient
 
-# KVKK Module Imports
-from kvkk_mcp_module.client import KvkkApiClient
-from kvkk_mcp_module.models import (
-    KvkkSearchRequest,
-    KvkkSearchResult,
-    KvkkDocumentMarkdown
-)
-
-# BDDK Module Imports
-from bddk_mcp_module.client import BddkApiClient
-from bddk_mcp_module.models import (
-    BddkSearchRequest
-)
-
 # Sigorta Tahkim Module Imports
 from sigorta_tahkim_mcp_module.client import SigortaTahkimApiClient
 from sigorta_tahkim_mcp_module.models import (
@@ -343,8 +329,6 @@ rekabet_client_instance = RekabetKurumuApiClient()
 bedesten_client_instance = BedestenApiClient()
 sayistay_client_instance = SayistayApiClient()
 sayistay_unified_client_instance = SayistayUnifiedClient()
-kvkk_client_instance = KvkkApiClient()
-bddk_client_instance = BddkApiClient()
 sigorta_tahkim_client_instance = SigortaTahkimApiClient()
 
 # Health check client (singleton for reuse)
@@ -1428,8 +1412,6 @@ def perform_cleanup():
         globals().get('bedesten_client_instance'),
         globals().get('sayistay_client_instance'),
         globals().get('sayistay_unified_client_instance'),
-        globals().get('kvkk_client_instance'),
-        globals().get('bddk_client_instance'),
         globals().get('sigorta_tahkim_client_instance')
     ]
     async def close_all_clients_async():
@@ -1629,208 +1611,6 @@ async def check_government_servers_health() -> Dict[str, Any]:
         "servers": health_results,
         "check_timestamp": f"{__import__('datetime').datetime.now().isoformat()}"
     }
-
-# --- MCP Tools for KVKK ---
-@app.tool(
-    description="Use this when searching Turkish data protection (KVKK/GDPR equivalent) decisions. For privacy, consent, and data breach cases.",
-    annotations={
-        "readOnlyHint": True,
-        "openWorldHint": True,
-        "idempotentHint": True
-    }
-)
-async def search_kvkk_decisions(
-    keywords: str = Field(..., description="Turkish keywords. Supports +required -excluded \"exact phrase\" operators"),
-    page: int = Field(1, ge=1, le=50, description="Page number for results (1-50)."),
-    # pageSize: int = Field(10, ge=1, le=20, description="Number of results per page (1-20).")
-) -> Dict[str, Any]:
-    """Search function for legal decisions."""
-    logger.info(f"KVKK search tool called with keywords: {keywords}")
-
-    pageSize = 10  # Default value
-
-    search_request = KvkkSearchRequest(
-        keywords=keywords,
-        page=page,
-        pageSize=pageSize
-    )
-
-    try:
-        result = await kvkk_client_instance.search_decisions(search_request)
-        logger.info(f"KVKK search completed. Found {len(result.decisions)} decisions on page {page}")
-        return result.model_dump()
-    except Exception as e:
-        logger.exception(f"Error in KVKK search: {e}")
-        # Return empty result on error
-        return KvkkSearchResult(
-            decisions=[],
-            total_results=0,
-            page=page,
-            pageSize=pageSize,
-            query=keywords
-        ).model_dump()
-
-@app.tool(
-    description="Use this when retrieving full text of a KVKK data protection decision. Returns paginated Markdown with metadata.",
-    annotations={
-        "readOnlyHint": True,
-        "openWorldHint": False,
-        "idempotentHint": True
-    }
-)
-async def get_kvkk_document_markdown(
-    decision_url: str = Field(..., description="KVKK decision URL from search results"),
-    page_number: int = Field(1, ge=1, description="Page number for paginated Markdown content (1-indexed, accepts int). Default is 1 (first 5,000 characters).")
-) -> Dict[str, Any]:
-    """Get KVKK decision as paginated Markdown."""
-    logger.info(f"KVKK document retrieval tool called for URL: {decision_url}")
-
-    if not decision_url or not decision_url.strip():
-        return KvkkDocumentMarkdown(
-            source_url=HttpUrl("https://www.kvkk.gov.tr"),
-            title=None,
-            decision_date=None,
-            decision_number=None,
-            subject_summary=None,
-            markdown_chunk=None,
-            current_page=page_number or 1,
-            total_pages=0,
-            is_paginated=False,
-            error_message="Decision URL is required and cannot be empty."
-        ).model_dump()
-    
-    try:
-        # Validate URL format
-        if not decision_url.startswith("https://www.kvkk.gov.tr/"):
-            return KvkkDocumentMarkdown(
-                source_url=HttpUrl(decision_url),
-                title=None,
-                decision_date=None,
-                decision_number=None,
-                subject_summary=None,
-                markdown_chunk=None,
-                current_page=page_number or 1,
-                total_pages=0,
-                is_paginated=False,
-                error_message="Invalid KVKK decision URL format. URL must start with https://www.kvkk.gov.tr/"
-            ).model_dump()
-
-        result = await kvkk_client_instance.get_decision_document(decision_url, page_number or 1)
-        logger.info(f"KVKK document retrieved successfully. Page {result.current_page}/{result.total_pages}, Content length: {len(result.markdown_chunk) if result.markdown_chunk else 0}")
-        return result.model_dump()
-        
-    except Exception as e:
-        logger.exception(f"Error retrieving KVKK document: {e}")
-        return KvkkDocumentMarkdown(
-            source_url=HttpUrl(decision_url),
-            title=None,
-            decision_date=None,
-            decision_number=None,
-            subject_summary=None,
-            markdown_chunk=None,
-            current_page=page_number or 1,
-            total_pages=0,
-            is_paginated=False,
-            error_message=f"Error retrieving KVKK document: {str(e)}"
-        ).model_dump()
-
-# --- MCP Tools for BDDK (Banking Regulation Authority) ---
-@app.tool(
-    description="Use this when searching Turkish banking regulation (BDDK) decisions. For banking licenses, fintech, and payment services.",
-    annotations={
-        "readOnlyHint": True,
-        "openWorldHint": True,
-        "idempotentHint": True
-    }
-)
-async def search_bddk_decisions(
-    keywords: str = Field(..., description="Search keywords in Turkish"),
-    page: int = Field(1, ge=1, description="Page number")
-    # pageSize: int = Field(10, ge=1, le=50, description="Results per page")
-) -> dict:
-    """Search BDDK banking regulation and supervision decisions."""
-    logger.info(f"BDDK search tool called with keywords: {keywords}, page: {page}")
-    
-    pageSize = 10  # Default value
-    
-    try:
-        search_request = BddkSearchRequest(
-            keywords=keywords,
-            page=page,
-            pageSize=pageSize
-        )
-        
-        result = await bddk_client_instance.search_decisions(search_request)
-        logger.info(f"BDDK search completed. Found {len(result.decisions)} decisions on page {page}")
-        
-        return {
-            "decisions": [
-                {
-                    "title": dec.title,
-                    "document_id": dec.document_id,
-                    "content": dec.content
-                }
-                for dec in result.decisions
-            ],
-            "total_results": result.total_results,
-            "page": result.page,
-            "pageSize": result.pageSize
-        }
-    
-    except Exception as e:
-        logger.exception(f"Error searching BDDK decisions: {e}")
-        return {
-            "decisions": [],
-            "total_results": 0,
-            "page": page,
-            "pageSize": pageSize,
-            "error": str(e)
-        }
-
-@app.tool(
-    description="Use this when retrieving full text of a BDDK banking regulation decision. Returns paginated Markdown format.",
-    annotations={
-        "readOnlyHint": True,
-        "openWorldHint": False,
-        "idempotentHint": True
-    }
-)
-async def get_bddk_document_markdown(
-    document_id: str = Field(..., description="BDDK document ID (e.g., '310')"),
-    page_number: int = Field(1, ge=1, description="Page number")
-) -> dict:
-    """Retrieve BDDK decision document in Markdown format."""
-    logger.info(f"BDDK document retrieval tool called for ID: {document_id}, page: {page_number}")
-    
-    if not document_id or not document_id.strip():
-        return {
-            "document_id": document_id,
-            "markdown_content": "",
-            "page_number": page_number,
-            "total_pages": 0,
-            "error": "Document ID is required"
-        }
-    
-    try:
-        result = await bddk_client_instance.get_document_markdown(document_id, page_number)
-        logger.info(f"BDDK document retrieved successfully. Page {result.page_number}/{result.total_pages}")
-        
-        return {
-            "document_id": result.document_id,
-            "markdown_content": result.markdown_content,
-            "page_number": result.page_number,
-            "total_pages": result.total_pages
-        }
-        
-    except Exception as e:
-        logger.exception(f"Error retrieving BDDK document: {e}")
-        return {
-            "document_id": document_id,
-            "markdown_content": "",
-            "page_number": page_number,
-            "total_pages": 0,
-            "error": str(e)
-        }
 
 # --- MCP Tools for Sigorta Tahkim Komisyonu (Insurance Arbitration Commission) ---
 @app.tool(
